@@ -1,4 +1,4 @@
-package service
+package engine
 
 import (
 	"encoding/json"
@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/opencloud-eu/opencloud/services/jobengine/pkg/config"
-	revactx "github.com/opencloud-eu/reva/v2/pkg/ctx"
+	"codeberg.org/kosmos-openworks/openworks-pipeworx/pkg/config"
 )
 
 var validIDRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -123,13 +122,12 @@ func (e *JobEngine) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		req.TargetPath = cleaned
 	}
 
-	// User ID from context (set by ExtractAccountUUID middleware)
-	user, ok := revactx.ContextGetUser(r.Context())
-	if !ok || user.GetId() == nil {
+	userInfo, ok := e.auth.ExtractUser(r)
+	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
-	userID := user.GetId().GetOpaqueId()
+	userID := userInfo.ID
 
 	// Rate limit: max 10 active jobs per user
 	activeJobs := e.GetUserJobs(userID, "")
@@ -186,8 +184,8 @@ func (e *JobEngine) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 
 func (e *JobEngine) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	userID := ""
-	if user, ok := revactx.ContextGetUser(r.Context()); ok && user.GetId() != nil {
-		userID = user.GetId().GetOpaqueId()
+	if userInfo, ok := e.auth.ExtractUser(r); ok {
+		userID = userInfo.ID
 	}
 	status := JobStatus(r.URL.Query().Get("status"))
 

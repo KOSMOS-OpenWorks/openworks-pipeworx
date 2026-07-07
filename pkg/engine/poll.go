@@ -1,4 +1,4 @@
-package service
+package engine
 
 import (
 	"encoding/json"
@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/opencloud-eu/opencloud/services/jobengine/pkg/config"
-	revactx "github.com/opencloud-eu/reva/v2/pkg/ctx"
+	"github.com/google/uuid"
+	"codeberg.org/kosmos-openworks/openworks-pipeworx/pkg/config"
 )
 
 // PollRequest is the worker → cloud message in each poll tick
@@ -16,6 +16,7 @@ type PollRequest struct {
 	Capacity int                `json:"capacity"`
 	Status   []WorkerJobStatus  `json:"status,omitempty"`
 	Data     map[string]any     `json:"data,omitempty"`
+	RegToken string             `json:"regToken,omitempty"`
 }
 
 // WorkerJobStatus is a progress/completion report from the worker
@@ -31,11 +32,12 @@ type WorkerJobStatus struct {
 
 // PollResponse is the cloud → worker message in each poll tick
 type PollResponse struct {
-	Assign []JobAssignment    `json:"assign"`
-	Cancel []string           `json:"cancel"`
-	Slots  map[string]int     `json:"slots"`
-	Denied []string           `json:"denied"`
-	Config PollConfig         `json:"config"`
+	Assign   []JobAssignment    `json:"assign"`
+	Cancel   []string           `json:"cancel"`
+	Slots    map[string]int     `json:"slots,omitempty"`
+	Denied   []string           `json:"denied,omitempty"`
+	RegToken *string            `json:"regToken"`
+	Config   PollConfig         `json:"config"`
 }
 
 // JobAssignment is a single job assigned to a worker
@@ -69,23 +71,12 @@ type PollConfig struct {
 }
 
 func (e *JobEngine) handleWorkerPoll(w http.ResponseWriter, r *http.Request) {
-	// Auth: identity comes from Bearer token via ExtractAccountUUID middleware
-	user, ok := revactx.ContextGetUser(r.Context())
-	if !ok || user.GetId() == nil {
+	userInfo, ok := e.auth.ExtractUser(r)
+	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
-
-	// Use app-token-label as worker ID if available (set by reva appauth manager).
-	// Falls back to user UUID if no token label is present.
-	workerID := user.GetId().GetOpaqueId()
-	if user.GetOpaque() != nil {
-		if entry, ok := user.GetOpaque().GetMap()["app-token-label"]; ok {
-			if label := string(entry.GetValue()); label != "" {
-				workerID = label
-			}
-		}
-	}
+	workerID := userInfo.ID
 
 	var req PollRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&req); err != nil {
@@ -117,9 +108,37 @@ func (e *JobEngine) handleWorkerPoll(w http.ResponseWriter, r *http.Request) {
 		e.processWorkerStatus(workerID, s)
 	}
 
+	// regToken validation:
+	// - Worker sends regToken → validate it
+	// - Worker sends pipeline data (no token or invalid token) → register + issue new token
+	// - regToken is in-memory, lost on engine restart → worker re-registers
+	var regToken *string
+	registeredNow := false
+
+	if req.RegToken != "" {
+		// Validate existing token
+		e.mu.RLock()
+		stored, ok := e.regTokens[workerID]
+		e.mu.RUnlock()
+		if ok && stored == req.RegToken {
+			regToken = &req.RegToken
+		}
+		// If not ok → regToken stays nil → worker will re-register
+	}
+
 	// Process worker data (pipelines, logs, etc.)
 	if req.Data != nil {
 		e.processWorkerData(workerID, req.Data)
+
+		// If pipelines were sent, issue a new regToken
+		if _, hasPipelines := req.Data["pipelines"]; hasPipelines {
+			newToken := uuid.New().String()
+			e.mu.Lock()
+			e.regTokens[workerID] = newToken
+			e.mu.Unlock()
+			regToken = &newToken
+			registeredNow = true
+		}
 	}
 
 	// Determine allowed types from pipe matrix
@@ -128,7 +147,8 @@ func (e *JobEngine) handleWorkerPoll(w http.ResponseWriter, r *http.Request) {
 	// If nothing is allowed, return 403
 	if len(slots) == 0 {
 		writeJSON(w, http.StatusForbidden, map[string]any{
-			"denied": denied,
+			"denied":   denied,
+			"regToken": regToken,
 		})
 		return
 	}
@@ -140,14 +160,19 @@ func (e *JobEngine) handleWorkerPoll(w http.ResponseWriter, r *http.Request) {
 	assignments := e.pickJobs(workerID, slots, req.Capacity)
 
 	resp := PollResponse{
-		Assign: assignments,
-		Cancel: cancellations,
-		Slots:  slots,
-		Denied: denied,
+		Assign:   assignments,
+		Cancel:   cancellations,
+		RegToken: regToken,
 		Config: PollConfig{
 			PollIntervalMin: e.cfg.Service.PollIntervalMin,
 			PollIntervalMax: e.cfg.Service.PollIntervalMax,
 		},
+	}
+
+	// Only include slots/denied on registration, not every poll
+	if registeredNow {
+		resp.Slots = slots
+		resp.Denied = denied
 	}
 
 	writeJSON(w, http.StatusOK, resp)

@@ -1,4 +1,4 @@
-module codeberg.org/kosmos-eu/openworks-pipeworx
+module codeberg.org/kosmos-openworks/openworks-pipeworx
 
 go 1.22
 

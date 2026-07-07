@@ -1,4 +1,4 @@
-package service
+package engine
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/opencloud-eu/opencloud/services/jobengine/pkg/config"
+	"codeberg.org/kosmos-openworks/openworks-pipeworx/pkg/config"
 )
 
 func setupTestEngine() (*JobEngine, *chi.Mux) {

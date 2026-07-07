@@ -1,10 +1,10 @@
-package service
+package engine
 
 import (
 	"testing"
 	"time"
 
-	"github.com/opencloud-eu/opencloud/services/jobengine/pkg/config"
+	"codeberg.org/kosmos-openworks/openworks-pipeworx/pkg/config"
 )
 
 func testConfig() *config.PipelineConfig {

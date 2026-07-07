@@ -1,4 +1,4 @@
-package service
+package engine
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/opencloud-eu/opencloud/services/jobengine/pkg/config"
+	"codeberg.org/kosmos-openworks/openworks-pipeworx/pkg/config"
 )
 
 // JobStatus represents the state of a job
@@ -49,6 +49,7 @@ type Job struct {
 // It does NOT execute jobs — workers pick them via the poll endpoint.
 type JobEngine struct {
 	cfg         *config.PipelineConfig
+	auth        AuthExtractor
 	jobs        map[string]*Job
 	mu          sync.RWMutex
 	stopCleanup chan struct{}
@@ -58,20 +59,23 @@ type JobEngine struct {
 	workerPick map[string][]string        // workerID → offered job types
 	pipeMatrix map[string]map[string]int   // workerID → { jobType → slots }
 	matrix     *PipeMatrix                 // persistent matrix (if loaded from file)
+	regTokens  map[string]string           // workerID → regToken (pipeline registration receipt)
 }
 
 // cleanupInterval removes completed/failed jobs older than 1 hour
 const jobRetention = 1 * time.Hour
 
 // New creates a new JobEngine (pure dispatcher, no internal workers)
-func New(cfg *config.PipelineConfig) *JobEngine {
+func New(cfg *config.PipelineConfig, auth AuthExtractor) *JobEngine {
 	e := &JobEngine{
 		cfg:         cfg,
+		auth:        auth,
 		jobs:        make(map[string]*Job),
 		stopCleanup: make(chan struct{}),
 		heartbeats:  make(map[string]time.Time),
 		workerPick:  make(map[string][]string),
 		pipeMatrix:  make(map[string]map[string]int),
+		regTokens:   make(map[string]string),
 	}
 
 	// start cleanup goroutine

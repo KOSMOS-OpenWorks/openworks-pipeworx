@@ -1,4 +1,4 @@
-package service
+package engine
 
 import (
 	"encoding/json"
@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/go-chi/chi/v5"
-	revactx "github.com/opencloud-eu/reva/v2/pkg/ctx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -251,12 +250,10 @@ func (e *JobEngine) handleDeleteWorker(w http.ResponseWriter, r *http.Request) {
 }
 
 // isAdmin checks if the requesting user has admin privileges.
-// TODO: integrate with OpenCloud role system properly.
-// For now, any authenticated user can manage the matrix.
 func (e *JobEngine) isAdmin(r *http.Request) bool {
-	user, ok := revactx.ContextGetUser(r.Context())
-	if !ok || user.GetId() == nil {
+	userInfo, ok := e.auth.ExtractUser(r)
+	if !ok {
 		return false
 	}
-	return true
+	return userInfo.IsAdmin
 }
