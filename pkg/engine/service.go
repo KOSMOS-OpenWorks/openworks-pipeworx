@@ -60,6 +60,9 @@ type JobEngine struct {
 	pipeMatrix map[string]map[string]int   // workerID → { jobType → slots }
 	matrix     *PipeMatrix                 // persistent matrix (if loaded from file)
 	regTokens  map[string]string           // workerID → regToken (pipeline registration receipt)
+
+	// Optional backend store (XIS provides this, OpenCloud does not)
+	storeProvider StoreProvider
 }
 
 // cleanupInterval removes completed/failed jobs older than 1 hour

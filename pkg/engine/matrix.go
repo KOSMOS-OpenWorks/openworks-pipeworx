@@ -248,12 +248,3 @@ func (e *JobEngine) handleDeleteWorker(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
-
-// isAdmin checks if the requesting user has admin privileges.
-func (e *JobEngine) isAdmin(r *http.Request) bool {
-	userInfo, ok := e.auth.ExtractUser(r)
-	if !ok {
-		return false
-	}
-	return userInfo.IsAdmin
-}

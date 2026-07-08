@@ -37,6 +37,10 @@ func (e *JobEngine) RegisterRoutes(r chi.Router) {
 
 	// Admin API for Pipe-Matrix
 	e.RegisterMatrixRoutes(r)
+
+	// Optional backend store API (/api/v0/store/*)
+	// Returns 404 if no StoreProvider is configured.
+	e.registerStoreRoutes(r)
 }
 
 // PipelineInfo is the public representation of a pipeline
