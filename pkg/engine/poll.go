@@ -264,14 +264,14 @@ func (e *JobEngine) processWorkerStatus(workerID string, s WorkerJobStatus) {
 		job.Result = s.Result
 		job.Retries++
 
-		// Check max retries from pipeline config
-		maxRetries := 0
-		if p, ok := e.cfg.Pipelines[job.Pipeline]; ok {
+		// Check max retries from pipeline config (default: 3)
+		maxRetries := 3
+		if p, ok := e.cfg.Pipelines[job.Pipeline]; ok && p.Job.MaxRetries > 0 {
 			maxRetries = p.Job.MaxRetries
 		}
 
 		// Re-queue only if not expired AND retries not exhausted
-		if job.ValidTill.After(time.Now()) && (maxRetries == 0 || job.Retries < maxRetries) {
+		if job.ValidTill.After(time.Now()) && job.Retries < maxRetries {
 			job.Status = StatusQueued
 			job.WorkerID = ""
 			job.PickedAt = time.Time{}
