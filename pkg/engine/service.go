@@ -55,8 +55,9 @@ type JobEngine struct {
 	stopCleanup chan struct{}
 
 	// Worker polling state
-	heartbeats map[string]time.Time       // workerID → last poll time
-	workerPick map[string][]string        // workerID → offered job types
+	heartbeats   map[string]time.Time       // workerID → last poll time
+	workerPick   map[string][]string        // workerID → offered job types
+	workerCap    map[string]int             // workerID → last reported capacity
 	pipeMatrix map[string]map[string]int   // workerID → { jobType → slots }
 	matrix     *PipeMatrix                 // persistent matrix (if loaded from file)
 	regTokens  map[string]string           // workerID → regToken (pipeline registration receipt)
@@ -77,6 +78,7 @@ func New(cfg *config.PipelineConfig, auth AuthExtractor) *JobEngine {
 		stopCleanup: make(chan struct{}),
 		heartbeats:  make(map[string]time.Time),
 		workerPick:  make(map[string][]string),
+		workerCap:   make(map[string]int),
 		pipeMatrix:  make(map[string]map[string]int),
 		regTokens:   make(map[string]string),
 	}

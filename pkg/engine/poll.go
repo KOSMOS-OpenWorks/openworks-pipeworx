@@ -99,9 +99,10 @@ func (e *JobEngine) handleWorkerPoll(w http.ResponseWriter, r *http.Request) {
 		return // no body — backpressure signal
 	}
 
-	// Record heartbeat + offered types
+	// Record heartbeat + offered types + capacity
 	e.recordHeartbeat(workerID)
 	e.recordPick(workerID, req.Pick)
+	e.recordCapacity(workerID, req.Capacity)
 
 	// Process status reports from the worker
 	for _, s := range req.Status {
@@ -378,6 +379,57 @@ func (e *JobEngine) recordPick(workerID string, pick []string) {
 		e.workerPick = make(map[string][]string)
 	}
 	e.workerPick[workerID] = pick
+}
+
+// recordCapacity stores the capacity reported by a worker
+func (e *JobEngine) recordCapacity(workerID string, capacity int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.workerCap[workerID] = capacity
+}
+
+// QueuedJobCount returns the number of queued (unassigned) jobs.
+func (e *JobEngine) QueuedJobCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	count := 0
+	for _, job := range e.jobs {
+		if job.Status == StatusQueued {
+			count++
+		}
+	}
+	return count
+}
+
+// AvailableCapacity returns total available worker capacity
+// (sum of all online workers' capacity minus their running jobs).
+func (e *JobEngine) AvailableCapacity() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	now := time.Now()
+	maxInterval := time.Duration(e.cfg.Service.PollIntervalMax) * time.Second
+	if maxInterval == 0 {
+		maxInterval = 30 * time.Second
+	}
+
+	total := 0
+	for wid, cap := range e.workerCap {
+		// Only count online workers
+		if last, ok := e.heartbeats[wid]; ok && now.Sub(last) < maxInterval*2 {
+			running := 0
+			for _, job := range e.jobs {
+				if job.WorkerID == wid && (job.Status == StatusRunning || job.Status == StatusQueued) {
+					running++
+				}
+			}
+			avail := cap - running
+			if avail > 0 {
+				total += avail
+			}
+		}
+	}
+	return total
 }
 
 // getWorkerSlots checks the pipe matrix and returns allowed slots + denied types
