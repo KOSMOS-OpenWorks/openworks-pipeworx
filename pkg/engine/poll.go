@@ -186,6 +186,8 @@ type WorkerInfo struct {
 	OnlineH  float64  `json:"onlineHours"`
 	Online   bool     `json:"online"`
 	Pick     []string `json:"pick,omitempty"`
+	Capacity int      `json:"capacity"`          // max (last reported)
+	Running  int      `json:"running"`           // currently assigned
 }
 
 // handleListWorkers returns all known workers with heartbeat info
@@ -213,6 +215,14 @@ func (e *JobEngine) handleListWorkers(w http.ResponseWriter, r *http.Request) {
 		maxInterval = 30 * time.Second
 	}
 
+	// Count running jobs per worker
+	runningPerWorker := make(map[string]int)
+	for _, job := range e.jobs {
+		if job.Status == StatusRunning || job.Status == StatusQueued {
+			runningPerWorker[job.WorkerID]++
+		}
+	}
+
 	workers := make([]WorkerInfo, 0, len(known))
 	for id := range known {
 		info := WorkerInfo{ID: id}
@@ -224,6 +234,8 @@ func (e *JobEngine) handleListWorkers(w http.ResponseWriter, r *http.Request) {
 		if pick, ok := e.workerPick[id]; ok {
 			info.Pick = pick
 		}
+		info.Capacity = e.workerCap[id]
+		info.Running = runningPerWorker[id]
 		workers = append(workers, info)
 	}
 
