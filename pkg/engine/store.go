@@ -47,6 +47,15 @@ type StoreProcessor struct {
 	LastCheck string `json:"lastCheck"`
 }
 
+// AuditEntry is a single entry in the job audit trail.
+type AuditEntry struct {
+	Time   string `json:"time"`            // ISO 8601
+	JID    int64  `json:"jid"`
+	Actor  string `json:"actor"`           // "webapp", "feeder", "worker:label", "admin"
+	Action string `json:"action"`          // "inject", "pick", "submit", "running", "completed", "failed", "reset", "cancel", "event_begin", "event_end", "soap", "proppatch"
+	Detail string `json:"detail,omitempty"` // free-form context (JSON or text)
+}
+
 // StoreInfo describes the backend store type and connection.
 type StoreInfo struct {
 	Type   string `json:"type"`              // "oracle", "postgres", "memory"
@@ -78,11 +87,22 @@ type StoreProvider interface {
 
 	// Info returns backend store type and connection info.
 	Info() StoreInfo
+
+	// Audit appends an entry to the job audit trail.
+	Audit(entry AuditEntry)
+
+	// GetAudit returns the audit trail for a job, chronologically.
+	GetAudit(jid int64) []AuditEntry
 }
 
 // SetStoreProvider enables the /api/v0/store/* endpoints.
 func (e *JobEngine) SetStoreProvider(sp StoreProvider) {
 	e.storeProvider = sp
+}
+
+// GetStoreProvider returns the current store provider (or nil).
+func (e *JobEngine) GetStoreProvider() StoreProvider {
+	return e.storeProvider
 }
 
 // RegisterStoreRoutes adds the /api/v0/store/* routes if a StoreProvider is set.
@@ -93,6 +113,7 @@ func (e *JobEngine) registerStoreRoutes(r chi.Router) {
 		r.Get("/jobs", e.handleStoreListJobs)
 		r.Post("/jobs", e.handleStoreInjectJob)
 		r.Get("/jobs/{jid}", e.handleStoreGetJob)
+		r.Get("/jobs/{jid}/audit", e.handleStoreGetAudit)
 		r.Post("/jobs/{jid}/reset", e.handleStoreResetJob)
 		r.Get("/services", e.handleStoreListServices)
 		r.Get("/processors", e.handleStoreListProcessors)
@@ -205,6 +226,27 @@ func (e *JobEngine) handleStoreInjectJob(w http.ResponseWriter, r *http.Request)
 		"state":   0,
 		"created": time.Now().Format(time.RFC3339),
 	})
+}
+
+func (e *JobEngine) handleStoreGetAudit(w http.ResponseWriter, r *http.Request) {
+	if !e.isAdmin(r) {
+		http.Error(w, "admin required", http.StatusForbidden)
+		return
+	}
+	sp := e.storeOrNotFound(w)
+	if sp == nil {
+		return
+	}
+	jid, err := strconv.ParseInt(chi.URLParam(r, "jid"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid jid"})
+		return
+	}
+	entries := sp.GetAudit(jid)
+	if entries == nil {
+		entries = []AuditEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jid": jid, "audit": entries})
 }
 
 func (e *JobEngine) handleStoreResetJob(w http.ResponseWriter, r *http.Request) {
