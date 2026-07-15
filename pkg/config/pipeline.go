@@ -47,6 +47,7 @@ type Pipeline struct {
 	Menu        string        `yaml:"menu"`         // "context" | "index" | "back"
 	Dialog      *DialogSpec   `yaml:"dialog"`        // optional user input dialog
 	Shares      *SharesConfig `yaml:"shares"`        // origin/destination share behavior
+	ReadOnly    bool          `yaml:"read_only" json:"readOnly,omitempty"` // true = only reads source, no writeback — no share permission needed
 	Job         JobConfig     `yaml:"job"`           // opaque job description for workers
 	Notification string      `yaml:"notification"`  // "toast" | "none"
 	DesignedBy  string        `yaml:"designed_by" json:"designedBy,omitempty"` // worker ID or "" for internal
