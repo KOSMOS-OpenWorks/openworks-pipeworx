@@ -136,6 +136,15 @@ func (e *JobEngine) handleWorkerPoll(w http.ResponseWriter, r *http.Request) {
 			newToken := uuid.New().String()
 			e.mu.Lock()
 			e.regTokens[workerID] = newToken
+			// Re-registration: reset stale running jobs from this worker.
+			// The worker restarted and no longer knows about these jobs.
+			for _, job := range e.jobs {
+				if job.WorkerID == workerID && job.Status == StatusRunning {
+					job.Status = StatusQueued
+					job.WorkerID = ""
+					job.PickedAt = time.Time{}
+				}
+			}
 			e.mu.Unlock()
 			regToken = &newToken
 			registeredNow = true
