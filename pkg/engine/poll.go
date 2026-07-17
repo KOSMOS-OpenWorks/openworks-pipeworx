@@ -84,11 +84,6 @@ func (e *JobEngine) handleWorkerPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Pick) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pick must not be empty"})
-		return
-	}
-
 	if req.Capacity <= 0 {
 		req.Capacity = 1
 	}
