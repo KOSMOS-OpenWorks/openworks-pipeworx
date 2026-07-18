@@ -2,12 +2,31 @@ package engine
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"codeberg.org/kosmos-openworks/openworks-pipeworx/pkg/config"
 )
+
+// Logger is an optional structured logger for the engine.
+// Set JobEngine.Logger to receive operational log messages.
+// If nil, falls back to log.Printf.
+type Logger interface {
+	Debug(msg string, keysAndValues ...any)
+	Info(msg string, keysAndValues ...any)
+	Warn(msg string, keysAndValues ...any)
+	Error(msg string, keysAndValues ...any)
+}
+
+// defaultLogger uses stdlib log as fallback
+type defaultLogger struct{}
+
+func (l *defaultLogger) Debug(msg string, kv ...any) {}
+func (l *defaultLogger) Info(msg string, kv ...any)  { log.Printf("[INFO] %s %v", msg, kv) }
+func (l *defaultLogger) Warn(msg string, kv ...any)  { log.Printf("[WARN] %s %v", msg, kv) }
+func (l *defaultLogger) Error(msg string, kv ...any) { log.Printf("[ERROR] %s %v", msg, kv) }
 
 // JobStatus represents the state of a job
 type JobStatus string
@@ -70,6 +89,9 @@ type JobEngine struct {
 	// (completed, failed-final, cancelled, expired). Set by the consumer
 	// to receive completion notifications.
 	OnJobDone func(*Job)
+
+	// Log is the optional structured logger. Set by consumer.
+	Log Logger
 }
 
 const (
@@ -91,6 +113,7 @@ func New(cfg *config.PipelineConfig, auth AuthExtractor) *JobEngine {
 		workerCap:   make(map[string]int),
 		pipeMatrix:  make(map[string]map[string]int),
 		regTokens:   make(map[string]string),
+		Log:         &defaultLogger{},
 	}
 
 	// start cleanup goroutine
@@ -163,6 +186,7 @@ func (e *JobEngine) Submit(pipelineID string, resources []string, userID string,
 	e.jobs[job.ID] = job
 	e.jobsMu.Unlock()
 
+	e.Log.Info("job submitted", "jobId", job.ID, "pipeline", pipelineID, "user", userID, "total", job.Total)
 	return job, nil
 }
 
@@ -202,6 +226,7 @@ func (e *JobEngine) CancelJob(jobID string) error {
 		return fmt.Errorf("job not found: %s", jobID)
 	}
 	job.Status = StatusCancelled
+	e.Log.Info("job cancelled", "jobId", jobID, "pipeline", job.Pipeline)
 	return nil
 }
 

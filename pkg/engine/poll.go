@@ -139,6 +139,7 @@ func (e *JobEngine) handleWorkerPoll(w http.ResponseWriter, r *http.Request) {
 			e.workerMu.Unlock()
 			regToken = &newToken
 			registeredNow = true
+			e.Log.Info("worker registered", "worker", workerID, "pick", req.Pick)
 		}
 	}
 
@@ -283,6 +284,7 @@ func (e *JobEngine) processWorkerStatus(workerID string, s WorkerJobStatus) {
 		job.Progress = 100
 		job.Result = s.Result
 		job.CompletedAt = time.Now()
+		e.Log.Info("job completed", "jobId", job.ID, "pipeline", job.Pipeline, "worker", workerID)
 		if e.OnJobDone != nil {
 			go e.OnJobDone(job)
 		}
@@ -307,6 +309,7 @@ func (e *JobEngine) processWorkerStatus(workerID string, s WorkerJobStatus) {
 		} else {
 			job.Status = StatusFailed
 			job.CompletedAt = time.Now()
+			e.Log.Warn("job failed (final)", "jobId", job.ID, "pipeline", job.Pipeline, "retries", job.Retries, "error", job.Error)
 			if e.OnJobDone != nil {
 				go e.OnJobDone(job)
 			}
@@ -664,6 +667,11 @@ func (e *JobEngine) pickJobs(workerID string, slots map[string]int, capacity int
 
 		assignments = append(assignments, assignment)
 		typeRunning[job.Pipeline]++
+		e.Log.Debug("job picked", "jobId", job.ID, "pipeline", job.Pipeline, "worker", workerID)
+	}
+
+	if len(assignments) > 0 {
+		e.Log.Info("jobs assigned", "worker", workerID, "count", len(assignments))
 	}
 
 	return assignments
