@@ -64,6 +64,9 @@ type JobEngine struct {
 
 	// Optional backend store (XIS provides this, OpenCloud does not)
 	storeProvider StoreProvider
+
+	// Optional callback for terminal job state changes (completed, failed)
+	OnJobDone func(job *Job)
 }
 
 // cleanupInterval removes completed/failed jobs older than 1 hour

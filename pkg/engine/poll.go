@@ -248,16 +248,18 @@ func (e *JobEngine) handleListWorkers(w http.ResponseWriter, r *http.Request) {
 
 // processWorkerStatus applies a worker's status report to the job
 func (e *JobEngine) processWorkerStatus(workerID string, s WorkerJobStatus) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	var doneJob *Job
 
+	e.mu.Lock()
 	job, ok := e.jobs[s.JobID]
 	if !ok {
+		e.mu.Unlock()
 		return
 	}
 
 	// Only accept status from the worker that owns this job
 	if job.WorkerID != workerID {
+		e.mu.Unlock()
 		return
 	}
 
@@ -274,6 +276,7 @@ func (e *JobEngine) processWorkerStatus(workerID string, s WorkerJobStatus) {
 		job.Progress = 100
 		job.Result = s.Result
 		job.CompletedAt = time.Now()
+		doneJob = job
 	}
 
 	if s.Status == StatusFailed {
@@ -295,7 +298,14 @@ func (e *JobEngine) processWorkerStatus(workerID string, s WorkerJobStatus) {
 		} else {
 			job.Status = StatusFailed
 			job.CompletedAt = time.Now()
+			doneJob = job
 		}
+	}
+	e.mu.Unlock()
+
+	// Fire callback outside the lock
+	if doneJob != nil && e.OnJobDone != nil {
+		e.OnJobDone(doneJob)
 	}
 }
 
