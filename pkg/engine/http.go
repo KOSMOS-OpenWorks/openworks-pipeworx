@@ -208,8 +208,8 @@ func (e *JobEngine) handleListAllJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *JobEngine) handleJobStats(w http.ResponseWriter, r *http.Request) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.jobsMu.RLock()
+	defer e.jobsMu.RUnlock()
 
 	stats := make(map[string]map[string]int) // pipeline → { status → count }
 	for _, job := range e.jobs {

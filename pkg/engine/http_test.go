@@ -12,6 +12,17 @@ import (
 	"codeberg.org/kosmos-openworks/openworks-pipeworx/pkg/config"
 )
 
+// httpTestAuth extracts user from X-User-Id header
+type httpTestAuth struct{}
+
+func (a *httpTestAuth) ExtractUser(r *http.Request) (*UserInfo, bool) {
+	uid := r.Header.Get("X-User-Id")
+	if uid == "" {
+		return nil, false
+	}
+	return &UserInfo{ID: uid, IsAdmin: uid == "admin"}, true
+}
+
 func setupTestEngine() (*JobEngine, *chi.Mux) {
 	cfg := config.PipelineDefaults()
 	cfg.Pipelines["test-echo"] = config.Pipeline{
@@ -24,7 +35,7 @@ func setupTestEngine() (*JobEngine, *chi.Mux) {
 			Params:  map[string]any{"command": "echo"},
 		},
 	}
-	engine := New(cfg)
+	engine := New(cfg, &httpTestAuth{})
 	r := chi.NewRouter()
 	engine.RegisterRoutes(r)
 	return engine, r
@@ -60,7 +71,7 @@ func TestSubmitJobNoAuth(t *testing.T) {
 	defer engine.Shutdown()
 
 	body, _ := json.Marshal(SubmitRequest{Pipeline: "test-echo", Resources: []string{"file.txt"}})
-	req := httptest.NewRequest("POST", "/api/v0/jobs", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/v0/jobs/", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -74,7 +85,7 @@ func TestSubmitJobInvalidPipelineID(t *testing.T) {
 	defer engine.Shutdown()
 
 	body, _ := json.Marshal(SubmitRequest{Pipeline: "../../etc/passwd", Resources: []string{"file.txt"}})
-	req := httptest.NewRequest("POST", "/api/v0/jobs", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/v0/jobs/", bytes.NewReader(body))
 	req.Header.Set("X-User-Id", "user1")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -93,7 +104,7 @@ func TestSubmitJobPathTraversal(t *testing.T) {
 		Resources:  []string{"file.txt"},
 		TargetPath: "../../../etc/",
 	})
-	req := httptest.NewRequest("POST", "/api/v0/jobs", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/v0/jobs/", bytes.NewReader(body))
 	req.Header.Set("X-User-Id", "user1")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

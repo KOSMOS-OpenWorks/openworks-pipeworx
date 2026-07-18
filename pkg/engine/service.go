@@ -51,10 +51,11 @@ type JobEngine struct {
 	cfg         *config.PipelineConfig
 	auth        AuthExtractor
 	jobs        map[string]*Job
-	mu          sync.RWMutex
+	jobsMu      sync.RWMutex
 	stopCleanup chan struct{}
 
-	// Worker polling state
+	// Worker polling state (guarded by workerMu, separate from jobsMu to reduce contention)
+	workerMu     sync.RWMutex
 	heartbeats   map[string]time.Time       // workerID → last poll time
 	workerPick   map[string][]string        // workerID → offered job types
 	workerCap    map[string]int             // workerID → last reported capacity
@@ -65,19 +66,18 @@ type JobEngine struct {
 	// Optional backend store (XIS provides this, OpenCloud does not)
 	storeProvider StoreProvider
 
-	// Optional callback for terminal job state changes (completed, failed, cancelled, expired)
-	OnJobDone func(job *Job)
+	// OnJobDone is called (async) when a job reaches a terminal state
+	// (completed, failed-final, cancelled, expired). Set by the consumer
+	// to receive completion notifications.
+	OnJobDone func(*Job)
 }
 
-// fireJobDone fires the OnJobDone callback if set. Must be called outside any lock.
-func (e *JobEngine) fireJobDone(job *Job) {
-	if e.OnJobDone != nil {
-		e.OnJobDone(job)
-	}
-}
-
-// cleanupInterval removes completed/failed jobs older than 1 hour
-const jobRetention = 1 * time.Hour
+const (
+	// jobRetention removes completed/failed jobs older than 1 hour
+	jobRetention = 1 * time.Hour
+	// workerTTL removes workers that haven't polled in 10 minutes
+	workerTTL = 10 * time.Minute
+)
 
 // New creates a new JobEngine (pure dispatcher, no internal workers)
 func New(cfg *config.PipelineConfig, auth AuthExtractor) *JobEngine {
@@ -132,14 +132,14 @@ func (e *JobEngine) Submit(pipelineID string, resources []string, userID string,
 
 	// Rate limit: check concurrent jobs for this pipeline
 	if pipeline.Job.RateLimit > 0 {
-		e.mu.RLock()
+		e.jobsMu.RLock()
 		active := 0
 		for _, j := range e.jobs {
 			if j.Pipeline == pipelineID && (j.Status == StatusQueued || j.Status == StatusRunning) {
 				active++
 			}
 		}
-		e.mu.RUnlock()
+		e.jobsMu.RUnlock()
 		if active >= pipeline.Job.RateLimit {
 			return nil, fmt.Errorf("rate limit exceeded: %d/%d active jobs for pipeline %s", active, pipeline.Job.RateLimit, pipelineID)
 		}
@@ -159,25 +159,25 @@ func (e *JobEngine) Submit(pipelineID string, resources []string, userID string,
 		ValidTill: validTill,
 	}
 
-	e.mu.Lock()
+	e.jobsMu.Lock()
 	e.jobs[job.ID] = job
-	e.mu.Unlock()
+	e.jobsMu.Unlock()
 
 	return job, nil
 }
 
 // GetJob returns a job by ID
 func (e *JobEngine) GetJob(jobID string) (*Job, bool) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.jobsMu.RLock()
+	defer e.jobsMu.RUnlock()
 	job, ok := e.jobs[jobID]
 	return job, ok
 }
 
 // GetUserJobs returns all jobs for a user, optionally filtered by status
 func (e *JobEngine) GetUserJobs(userID string, statusFilter JobStatus) []*Job {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.jobsMu.RLock()
+	defer e.jobsMu.RUnlock()
 
 	var result []*Job
 	for _, job := range e.jobs {
@@ -194,15 +194,14 @@ func (e *JobEngine) GetUserJobs(userID string, statusFilter JobStatus) []*Job {
 
 // CancelJob cancels a queued or running job
 func (e *JobEngine) CancelJob(jobID string) error {
-	e.mu.Lock()
+	e.jobsMu.Lock()
+	defer e.jobsMu.Unlock()
+
 	job, ok := e.jobs[jobID]
 	if !ok {
-		e.mu.Unlock()
 		return fmt.Errorf("job not found: %s", jobID)
 	}
 	job.Status = StatusCancelled
-	e.mu.Unlock()
-	e.fireJobDone(job)
 	return nil
 }
 
@@ -213,15 +212,15 @@ func (e *JobEngine) Pipelines() map[string]config.Pipeline {
 
 // SetPipeMatrix sets the capability matrix for workers
 func (e *JobEngine) SetPipeMatrix(matrix map[string]map[string]int) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.workerMu.Lock()
+	defer e.workerMu.Unlock()
 	e.pipeMatrix = matrix
 }
 
 // SetWorkerSlots sets the slots for a single worker in the pipe matrix
 func (e *JobEngine) SetWorkerSlots(workerID string, slots map[string]int) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.workerMu.Lock()
+	defer e.workerMu.Unlock()
 	e.pipeMatrix[workerID] = slots
 }
 
@@ -231,10 +230,10 @@ func (e *JobEngine) LoadMatrix(path string) error {
 	if err != nil {
 		return err
 	}
-	e.mu.Lock()
+	e.workerMu.Lock()
 	e.matrix = m
 	e.pipeMatrix = m.ToEngineFormat()
-	e.mu.Unlock()
+	e.workerMu.Unlock()
 	return nil
 }
 
@@ -250,27 +249,35 @@ func (e *JobEngine) cleanupLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			var expired []*Job
-			e.mu.Lock()
 			now := time.Now()
+
+			// Clean up finished/expired jobs
+			e.jobsMu.Lock()
 			for id, job := range e.jobs {
-				// Clean up finished jobs 1h after completion
 				if (job.Status == StatusCompleted || job.Status == StatusFailed ||
 					job.Status == StatusCancelled || job.Status == StatusExpired) &&
 					!job.CompletedAt.IsZero() && now.Sub(job.CompletedAt) > jobRetention {
 					delete(e.jobs, id)
 				}
-				// Expire jobs past validTill
 				if job.Status == StatusQueued && !job.ValidTill.IsZero() && now.After(job.ValidTill) {
 					job.Status = StatusExpired
-					job.CompletedAt = now
-					expired = append(expired, job)
 				}
 			}
-			e.mu.Unlock()
-			for _, job := range expired {
-				e.fireJobDone(job)
+			e.jobsMu.Unlock()
+
+			// Clean up dead workers (no heartbeat for workerTTL)
+			e.workerMu.Lock()
+			for wid, last := range e.heartbeats {
+				if now.Sub(last) > workerTTL {
+					delete(e.heartbeats, wid)
+					delete(e.workerPick, wid)
+					delete(e.workerCap, wid)
+					delete(e.regTokens, wid)
+					// Note: pipeMatrix is NOT cleaned — it represents persistent authorization
+				}
 			}
+			e.workerMu.Unlock()
+
 		case <-e.stopCleanup:
 			return
 		}

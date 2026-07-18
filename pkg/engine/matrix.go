@@ -140,9 +140,9 @@ func (e *JobEngine) handleGetMatrix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	e.mu.RLock()
+	e.workerMu.RLock()
 	matrix := e.pipeMatrix
-	e.mu.RUnlock()
+	e.workerMu.RUnlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{"workers": matrix})
 }
@@ -161,9 +161,9 @@ func (e *JobEngine) handleSetMatrix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	e.mu.Lock()
+	e.workerMu.Lock()
 	e.pipeMatrix = req.Workers
-	e.mu.Unlock()
+	e.workerMu.Unlock()
 
 	// Persist
 	if e.matrix != nil {
@@ -187,9 +187,9 @@ func (e *JobEngine) handleGetWorkerSlots(w http.ResponseWriter, r *http.Request)
 
 	workerID := chi.URLParam(r, "workerID")
 
-	e.mu.RLock()
+	e.workerMu.RLock()
 	slots, ok := e.pipeMatrix[workerID]
-	e.mu.RUnlock()
+	e.workerMu.RUnlock()
 
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "worker not found in matrix"})
@@ -215,9 +215,9 @@ func (e *JobEngine) handleSetWorkerSlots(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	e.mu.Lock()
+	e.workerMu.Lock()
 	e.pipeMatrix[workerID] = req.Slots
-	e.mu.Unlock()
+	e.workerMu.Unlock()
 
 	// Persist
 	if e.matrix != nil {
@@ -236,9 +236,9 @@ func (e *JobEngine) handleDeleteWorker(w http.ResponseWriter, r *http.Request) {
 
 	workerID := chi.URLParam(r, "workerID")
 
-	e.mu.Lock()
+	e.workerMu.Lock()
 	delete(e.pipeMatrix, workerID)
-	e.mu.Unlock()
+	e.workerMu.Unlock()
 
 	// Persist
 	if e.matrix != nil {
