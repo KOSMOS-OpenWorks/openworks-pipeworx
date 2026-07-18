@@ -303,9 +303,8 @@ func (e *JobEngine) processWorkerStatus(workerID string, s WorkerJobStatus) {
 	}
 	e.mu.Unlock()
 
-	// Fire callback outside the lock
-	if doneJob != nil && e.OnJobDone != nil {
-		e.OnJobDone(doneJob)
+	if doneJob != nil {
+		e.fireJobDone(doneJob)
 	}
 }
 
@@ -501,7 +500,8 @@ func (e *JobEngine) getWorkerCancellations(workerID string) []string {
 // pickJobs atomically assigns queued jobs to the worker
 func (e *JobEngine) pickJobs(workerID string, slots map[string]int, capacity int) []JobAssignment {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+
+	var doneInPick []*Job
 
 	// Count how many jobs this worker already has running
 	running := 0
@@ -551,6 +551,8 @@ func (e *JobEngine) pickJobs(workerID string, slots map[string]int, capacity int
 		// Check if job is still valid
 		if !job.ValidTill.IsZero() && job.ValidTill.Before(now) {
 			job.Status = StatusExpired
+			job.CompletedAt = now
+			doneInPick = append(doneInPick, job)
 			continue
 		}
 
@@ -579,6 +581,8 @@ func (e *JobEngine) pickJobs(workerID string, slots map[string]int, capacity int
 			if pipeline.Job.MaxRetries > 0 && job.Retries >= pipeline.Job.MaxRetries {
 				job.Status = StatusFailed
 				job.Error = "max retries exceeded"
+				job.CompletedAt = now
+				doneInPick = append(doneInPick, job)
 				continue
 			}
 		}
@@ -643,6 +647,12 @@ func (e *JobEngine) pickJobs(workerID string, slots map[string]int, capacity int
 
 		assignments = append(assignments, assignment)
 		typeRunning[job.Pipeline]++
+	}
+
+	e.mu.Unlock()
+
+	for _, job := range doneInPick {
+		e.fireJobDone(job)
 	}
 
 	return assignments

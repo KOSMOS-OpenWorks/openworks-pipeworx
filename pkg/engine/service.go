@@ -65,8 +65,15 @@ type JobEngine struct {
 	// Optional backend store (XIS provides this, OpenCloud does not)
 	storeProvider StoreProvider
 
-	// Optional callback for terminal job state changes (completed, failed)
+	// Optional callback for terminal job state changes (completed, failed, cancelled, expired)
 	OnJobDone func(job *Job)
+}
+
+// fireJobDone fires the OnJobDone callback if set. Must be called outside any lock.
+func (e *JobEngine) fireJobDone(job *Job) {
+	if e.OnJobDone != nil {
+		e.OnJobDone(job)
+	}
 }
 
 // cleanupInterval removes completed/failed jobs older than 1 hour
@@ -188,13 +195,14 @@ func (e *JobEngine) GetUserJobs(userID string, statusFilter JobStatus) []*Job {
 // CancelJob cancels a queued or running job
 func (e *JobEngine) CancelJob(jobID string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	job, ok := e.jobs[jobID]
 	if !ok {
+		e.mu.Unlock()
 		return fmt.Errorf("job not found: %s", jobID)
 	}
 	job.Status = StatusCancelled
+	e.mu.Unlock()
+	e.fireJobDone(job)
 	return nil
 }
 
@@ -242,6 +250,7 @@ func (e *JobEngine) cleanupLoop() {
 	for {
 		select {
 		case <-ticker.C:
+			var expired []*Job
 			e.mu.Lock()
 			now := time.Now()
 			for id, job := range e.jobs {
@@ -254,9 +263,14 @@ func (e *JobEngine) cleanupLoop() {
 				// Expire jobs past validTill
 				if job.Status == StatusQueued && !job.ValidTill.IsZero() && now.After(job.ValidTill) {
 					job.Status = StatusExpired
+					job.CompletedAt = now
+					expired = append(expired, job)
 				}
 			}
 			e.mu.Unlock()
+			for _, job := range expired {
+				e.fireJobDone(job)
+			}
 		case <-e.stopCleanup:
 			return
 		}
